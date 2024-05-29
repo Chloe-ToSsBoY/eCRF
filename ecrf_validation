@@ -1,0 +1,667 @@
+import pandas as pd
+from io import BytesIO
+import streamlit as st
+import sys
+from openpyxl import Workbook
+from openpyxl.styles import PatternFill
+from openpyxl.utils.dataframe import dataframe_to_rows
+from datetime import datetime
+
+class ValidationClass:
+    def __init__(self):
+        #eCRFs
+        self.ecrf_df3 = pd.DataFrame()
+        self.ecrf_df4 = pd.DataFrame()
+        #CHECKS
+        self.dup_qids = pd.DataFrame()
+        self.filtered_datas = pd.DataFrame()
+        self.parent_qs = pd.DataFrame()
+        self.blank_instructions = pd.DataFrame()
+        self.empty_texts = pd.DataFrame()
+        self.empty_field_types = pd.DataFrame()
+        self.bl_emptys = pd.DataFrame()
+        self.ffs = pd.DataFrame()
+        self.empty_answers = pd.DataFrame()
+        self.matching_amounts = pd.DataFrame()
+        self.validate_date_fields = pd.DataFrame()
+        self.validate_answer_overrides = pd.DataFrame()
+        self.fys = pd.DataFrame()
+        self.nms = pd.DataFrame()
+        self.multi_label_names = pd.DataFrame()
+        self.same_domain_names = pd.DataFrame()
+        self.empty_bios = pd.DataFrame()
+        self.at_least_one_not_emptys = pd.DataFrame()
+        self.space1s = pd.DataFrame()
+        self.space2s = pd.DataFrame()
+        #parse_ecrf marker
+        self.checks_executed = False
+
+
+    def parse_ecrf(self,ecrf_raw):
+        blacklist = ['Study Info', 'eCRF Flow', 'eCRF Guide', 'Time And Events']
+        ecrf_raw2 = {key: ecrf_raw[key] for key in list(ecrf_raw.keys()) if key not in blacklist}
+        # sheetname : dataframe
+        # ecrf_raw2
+        pdlist = []
+        duplist = []
+        tab = [tab for tab in ecrf_raw2.keys()]
+        newlist = []
+
+        flag = []
+        num = 0
+        flag2 = 1
+        standard_column_names = ['Q #', 'Parent Q#', 'icon Accessed Help Text', 'On Screen Instructions', 'Question',
+                                 'Answers', 'Export Value', 'Database Value', 'Display Sequence', 'Field Type',
+                                 'Answer Overrides', 'Prefix Label', 'Postfix Label', 'Tools', 'Non Mandatory / Read Only',
+                                 'Answer Range', 'Business Logic / Validation', 'Table / Form Key Column', 'Domain',
+                                 'Variable', 'Label']
+        len1 = len(standard_column_names)
+        # check dup columns
+        for i in tab:
+            if i not in newlist:
+                newlist.append(i)
+            else:
+                duplist.append(i)
+        if duplist == []:
+            for item in ecrf_raw2.values():
+                pdlist.append(item)
+
+            #reference_columns = standard_column_names  # 第一个tab的columns列表集
+            # to see if they shares the same amount of columns
+            for index, column in enumerate(pdlist):
+                # print(index,len(list(column.columns)))
+                if len(list(column.columns)) != len1:
+                    print(newlist[index] + ' shares different numbers of columns from the Standard columns')
+                    flag2 = 0
+                    flag = True
+        else:
+            print(f'{duplist} are duplicated')
+        if flag2 == 1:
+            for df in pdlist[0:]:
+                if list(df.columns) != standard_column_names:
+                    print('The following column names in ' + newlist[
+                        num] + ' are not matching with standard column headers:')  ####mark tab name
+                    flag.append(newlist[num])
+                    num += 1
+                    for i in range(len(list(df.columns))):
+                        if list(df.columns)[i] != standard_column_names[i]:
+                            print('['+list(df.columns)[i]+']')
+                    print('\n')
+                    continue
+
+                else:
+                    num += 1
+
+            if flag == []:
+                # 新加一个 ‘Form coulmn’在每个sheet的df的最后来标识每个sheetname
+                for key in ecrf_raw2.keys():
+                    ecrf_raw2[key]['Form'] = key
+                ecrf_df = pd.concat(ecrf_raw2.values(), ignore_index=True)
+                ecrf_df['Answers'] = ecrf_df['Answers'].astype(str)
+                ecrf_df['Answers'] = ecrf_df['Answers'].replace('nan', '')
+
+                ecrf_df['Page'] = ''  # 新建空列page
+                ecrf_df['Section'] = ''  # 新建空列section
+                page_val = ''
+                section_val = ''
+                for row_num in range(ecrf_df.shape[0]):#ecrf_df.shape[0]是concat后的全部行数, #ecrf_df.shape[1]是列数
+                    if isinstance(ecrf_df['Q #'].iloc[row_num], str):  # Q#列下依次每个cell查询是不是str，(因为section和page是存在于QID下且不是数字)，提出来赋值给新建的page和section
+                        if 'Page' in ecrf_df['Q #'].iloc[row_num]:  # 如果在#Q#下找到cell存在'page'
+                            page_val = ecrf_df['Q #'].iloc[row_num]  # 把值赋给page_val
+
+                        if 'Section' in ecrf_df['Q #'].iloc[row_num]:
+                            section_val = ecrf_df['Q #'].iloc[row_num]  # 同样检测section
+
+                        ecrf_df['Page'].iloc[row_num] = page_val
+                        ecrf_df['Section'].iloc[row_num] = section_val
+                    else:
+                        ecrf_df['Page'].iloc[row_num] = page_val
+                        ecrf_df['Section'].iloc[row_num] = section_val
+
+                ecrf_df2 = ecrf_df[~ecrf_df["Q #"].str.contains("[A-Za-z]", na=False, regex=True)].reset_index(drop=True)  # drop所有str，只留下数字qid
+                ecrf_df2.fillna('', inplace=True)  # 把NaN变成''
+               # ecrf_df2 = ecrf_df2.rename(columns={'Domain': 'Domain Name', 'Variable': 'Variable Name', 'Label': 'Label Name'})
+               # 添加下面的column 到ecrf_df3,下面的columns就是最后对比需要的columns
+                ecrf_df4 = ecrf_df2[
+                    ['Form', 'Page', 'Section', 'Q #', 'Parent Q#', 'icon Accessed Help Text', 'On Screen Instructions', 'Question', 'Answers','Export Value', 'Database Value',
+                     'Display Sequence', 'Field Type', 'Answer Overrides','Prefix Label','Postfix Label','Tools','Non Mandatory / Read Only','Business Logic / Validation','Table / Form Key Column','Domain', 'Variable', 'Label',
+                     ]]
+                ecrf_df4['Status'] = ''
+                self.ecrf_df4 = ecrf_df4
+                ecrf_df3 = ecrf_df2[
+                    ['Form', 'Page', 'Section', 'Q #', 'Parent Q#', 'icon Accessed Help Text', 'On Screen Instructions', 'Question', 'Answers','Export Value', 'Database Value',
+                     'Display Sequence', 'Field Type', 'Answer Overrides','Prefix Label','Postfix Label','Tools','Non Mandatory / Read Only','Business Logic / Validation','Table / Form Key Column','Domain', 'Variable', 'Label',
+                     ]]
+                ecrf_df3 = ecrf_df3.map(lambda x: x.strip() if isinstance(x, str) else x)
+                # 因为要比较'Answers/Database Value/Display Sequence,要转成str'
+                ecrf_df3[['Answers', 'Database Value', 'Display Sequence']] = ecrf_df3[
+                    ['Answers', 'Database Value', 'Display Sequence']].astype(str)
+                ecrf_df3[['Answers', 'Database Value', 'Display Sequence']] = ecrf_df3[
+                    ['Answers', 'Database Value', 'Display Sequence']].replace('nan', '')
+                ecrf_df3['Status'] = ''
+                self.ecrf_df3 = ecrf_df3
+                self.checks_executed = True
+            else:
+                print('Please fix above and reload the ecrf')
+        else:
+            print('Please check columns in tabs mentioned above')
+    def dup_qid(self):           # Duplicate QIDs
+        dup_qid = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.dup_qids = dup_qid[(dup_qid.duplicated('Q #',keep = False))]
+
+    def parent_q(self):    # If 'Parent Q#' is not null , then the QID under this column must be in the list of ALL QID#.
+        parent_q = self.ecrf_df3.loc[self.ecrf_df3['Parent Q#'].ne('')]
+        list_qid = [str(qid) for qid in self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]['Q #']] #全部的qid list
+        #截parent Q#下的QID数字
+        start_char = "Q"
+        end_char = " "
+        def get_qid_from_parentq(text):
+            start_index = text.find(start_char)
+            end_index = text.find(end_char)
+            if start_index != -1 and end_index != -1:
+                text = text[start_index + 1:end_index]
+                return text
+        parent_q['Parent Q#2'] = parent_q['Parent Q#'].apply(get_qid_from_parentq) #截完新建'Parent Q#2' column
+        parent_qs = parent_q[~parent_q['Parent Q#2'].isin(list_qid)]
+        self.parent_qs = parent_qs.drop('Parent Q#2',axis = 1)
+
+    def filtered_data(self):  # qid starts with zero and length is not 4
+        filtered_data = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        filtered_data['Q #'] = filtered_data['Q #'].astype(str)
+        self.filtered_datas = filtered_data[~(filtered_data['Q #'].apply(lambda val: val.isdigit() is True and len(str(val)) >= 4 and str(val)[0] != '0'))]
+
+    def empty_field_type(self): # empty field type column
+        empty_field_type = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.empty_field_types = empty_field_type[empty_field_type['Field Type'].eq('')]
+
+    def empty_text(self):# QID exists but questiontext is missing
+        empty_text = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.empty_texts = empty_text[empty_text['Question'].eq('') | empty_text['Question'].str.match('^[0-9]+$')]
+
+    def multi_label_name(self):# when a QID has same domain, same Variable Name but different [Label Name]
+        multi_label_name = self.ecrf_df3[self.ecrf_df3.duplicated(['Form', 'Variable'], keep=False)]
+        multi_label_name = multi_label_name.groupby(['Domain', 'Variable']).filter(
+            lambda group: group['Label'].nunique() > 1)
+        self.multi_label_names = multi_label_name.sort_values(['Domain', 'Variable'])
+
+    def same_domain_name(self):  # When 2 variables within a Form are the same, the Domain Name should be different.
+        condition1 = self.ecrf_df3['Variable'].ne('')
+        filtered_df = self.ecrf_df3[condition1]
+        same_domain_name = filtered_df[filtered_df.duplicated(['Form', 'Variable'], keep=False)]
+        same_domain_name = same_domain_name.groupby(['Form', 'Variable']).filter(
+            lambda group: group['Domain'].nunique() == 1)
+        self.same_domain_names = same_domain_name.sort_values(['Form', 'Variable', 'Domain'])
+
+    def empty_bio(self): # qid exists but missing Domain name or Variable name or Label name
+        empty_bio = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.empty_bios = empty_bio[
+            empty_bio['Domain'].eq('') | empty_bio['Variable'].eq('') | empty_bio['Label'].eq('')]
+
+    def at_least_one_not_empty(self):    # at least 1 is not empty among Domain name or Variable name or Label name
+        condition2 = self.ecrf_df3['Q #'].ne('')
+        filtered_df = self.ecrf_df3[condition2]
+        at_least_one_not_empty = filtered_df.loc[
+            filtered_df['Domain'].ne('') | filtered_df['Variable'].ne('') | filtered_df['Label'].ne(
+                '')]
+        self.at_least_one_not_emptys = at_least_one_not_empty.loc[at_least_one_not_empty['Variable'].eq('') | at_least_one_not_empty['Label'].eq('')]
+
+    def ff(self):    # when Field Type is Free Form Text/File Input,Answer is not empty.
+        search_list = ['free form', 'freeform', 'file input', 'fileinput']
+        ff = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        ff = ff[ff['Field Type'].str.lower().str.contains('|'.join(search_list), case=False)]
+        # Ignore rows where Answers, Export Value, Database Value, and Display Sequence are empty
+        self.ffs = ff[~((ff['Answers'] == '') & (ff['Database Value'] == '') & (
+                    ff['Display Sequence'] == ''))]
+
+    def fy(self):    #field type column check
+        standard_names_1=['Drop Down List - Single Select','Drop Down List - Multi Select','Freeform Text Entry - Short','Freeform Text Entry - Long','Time w/ Format 99:99 (24 hr clock)','Time w/ Format 99:99:99 (24 hr clock)','Time w/ Format 12:59 (12 hr clock)','Numeric','Numeric w/ upto 1 decimal',
+                          'Numeric w/ upto 2 decimals','Radio Button List - Single Select','Check Box List - Multi Select','Drop Down List - Related Question','File Input','Yes / No Multiselect','Date w/ Format dd/mmm/yyyy','Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy','Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or UNK',
+                          'Date w/ Format mmm/yyyy or yyyy or UNK','Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or UNK or ND','Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or ND','Date w/ Format dd/mmm/yyyy or ND']
+        fy = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.fys = fy[~fy['Field Type'].isin(standard_names_1)]
+
+    def nm(self):    #Non Mandatory / Read Only Column check
+        standard_names_2 = ['Non Mandatory / Read Only','Non Mandatory','Read Only']
+        nm = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        self.nms = nm[~nm['Non Mandatory / Read Only'].isin(standard_names_2) & (nm['Non Mandatory / Read Only'] != '')]
+
+    def empty_answer(self):    # When Field Type is Single Select, Drop Down List or Multi Select where Answers is empty
+        search_list3 = ['Select']
+        self.empty_answers = self.ecrf_df3.loc[
+            (self.ecrf_df3['Q #'].ne('')) &
+            (self.ecrf_df3['Field Type'].str.lower().str.contains('|'.join(search_list3), case=False)) &
+            (self.ecrf_df3['Answers'] == '')
+            ]
+
+    def blank_instruction(self):
+        search_list4 = ['Multi Select','Date']
+        self.blank_instructions = self.ecrf_df3.loc[(self.ecrf_df3['Q #'].ne('')) &
+                                          (self.ecrf_df3['Field Type'].str.contains('|'.join(search_list4),case=False)) &
+                                          (self.ecrf_df3['On Screen Instructions'] == '')]
+
+    def bl_empty(self): # when field type is Drop Down - Related and business logic empty
+        search_list5 = ['Related']
+        self.bl_emptys = self.ecrf_df3.loc[(self.ecrf_df3['Q #'].ne('')) &
+                                          (self.ecrf_df3['Field Type'].str.contains('|'.join(search_list5),case=False)) &
+                                          (self.ecrf_df3['Business Logic / Validation'] == '')]
+
+    def matching_amount(self):    # Check data numbers in ['Answers'] and ['Database Value'] and ['Display Sequence'] not matching
+        search_list2 = 'Select'
+        matching_amount = self.ecrf_df3.loc[self.ecrf_df3['Q #'].ne('')]
+        matching_amount = matching_amount[matching_amount['Field Type'].str.contains(search_list2)]
+
+        # Check for repeated series of values within 'Database Value' and 'Display Sequence' columns
+        matching_amount['repeated_series_db'] = matching_amount['Database Value'].apply(
+            lambda x: any(x.split('\n').count(item) > 1 for item in x.split('\n')))
+        matching_amount['repeated_series_ds'] = matching_amount['Display Sequence'].apply(
+            lambda x: any(x.split('\n').count(item) > 1 for item in x.split('\n')))
+
+        # Apply and lambda functions to check for counts of the specific string
+        matching_amount['count_column1'] = matching_amount.apply(lambda row: row['Answers'].count('\n'), axis=1)
+        matching_amount['count_column2'] = matching_amount.apply(lambda row: row['Database Value'].count('\n'),
+                                                                 axis=1)
+        matching_amount['count_column3'] = matching_amount.apply(lambda row: row['Display Sequence'].count('\n'),
+                                                                 axis=1)
+        # Calculate differences between counts
+        matching_amount['difference1'] = matching_amount['count_column1'] - matching_amount['count_column2']
+        matching_amount['difference2'] = matching_amount['count_column1'] - matching_amount['count_column3']
+        matching_amount['difference3'] = matching_amount['count_column2'] - matching_amount['count_column3']
+
+        # Filter rows with repeated series of values or differences in counts
+        matching_amount = matching_amount.loc[
+            (matching_amount['repeated_series_db']) | (matching_amount['repeated_series_ds']) |
+            (matching_amount['difference1'] != 0) | (matching_amount['difference2'] != 0) | (
+                        matching_amount['difference3'] != 0)
+            ]
+        # Drop unnecessary columns
+        self.matching_amounts = matching_amount.drop(
+            columns=['repeated_series_db', 'repeated_series_ds', 'count_column1', 'count_column2', 'count_column3',
+                     'difference1', 'difference2', 'difference3'])
+
+    def validate_date_field(self):#check that the "Field Type" is "Date," the "Postfix Column" contains the same date format, and the "Tools" column includes "Calendar,"
+        condition_calendar = self.ecrf_df3['Tools'].str.lower().fillna('').str.contains('calendar')
+        condition_same_format = self.ecrf_df3['Postfix Label'].str.lower().str.contains('dd/mmm/yyyy')
+        condition_tools_date = self.ecrf_df3['Field Type'].str.lower().str.contains('date')
+        date_field_invalid = self.ecrf_df3[(condition_tools_date & ~(condition_calendar & condition_same_format)) | (
+                    condition_calendar & ~(condition_tools_date & condition_same_format))]
+        self.validate_date_fields = date_field_invalid
+
+    def validate_answer_override(self):
+        unk_present = self.ecrf_df3['Field Type'].str.contains('unk', case=False)
+        nd_present = self.ecrf_df3['Field Type'].str.contains('nd', case=False)
+
+        # If UNK is present, check that UNK is in Answer Overrides Column and Postfix Label
+        unk_conditions = unk_present & ~(
+                self.ecrf_df3['Answer Overrides'].str.contains('unk', case=False) &
+                self.ecrf_df3['Postfix Label'].str.contains('unk', case=False)
+        )
+
+        # If ND is present, check that ND is in Answer Overrides Column and Postfix Label
+        nd_conditions = nd_present & ~(
+                self.ecrf_df3['Answer Overrides'].str.contains('nd', case=False) &
+                self.ecrf_df3['Postfix Label'].str.contains('nd', case=False)
+        )
+
+        # If both UNK and ND are present, check that ND is in Answer Overrides Column and Postfix Label
+        unk_nd_conditions = unk_present & nd_present & ~(
+                self.ecrf_df3['Answer Overrides'].str.contains('nd', case=False) &
+                self.ecrf_df3['Postfix Label'].str.contains('nd', case=False)
+        )
+        # Combine all conditions to get rows that violate the specified rules
+        self.validate_answer_overrides = self.ecrf_df3[unk_conditions | nd_conditions | unk_nd_conditions]
+
+
+    def space1(self):#Check_19 check spaces and line breaks
+        spaces1 = self.ecrf_df4.loc[self.ecrf_df4['Q #'].ne('')]
+        cols1 = ['icon Accessed Help Text', 'On Screen Instructions', 'Question', 'Field Type', 'Domain', 'Variable', 'Label']
+        def check_whitespace01(cell_value):
+            if isinstance(cell_value, str) and ((cell_value.startswith(" ") or cell_value.endswith(" ")) or ('\n' in cell_value)):
+                return True
+            else:
+                return False
+        # 在指定列应用检测函数
+        spaces1['Contains_Whitespace'] = spaces1[cols1].map(lambda x: check_whitespace01(x)).any(axis=1)
+        # 筛选包含空格的行
+        spaces1 = spaces1[spaces1['Contains_Whitespace']]
+        # 删除辅助列
+        self.space1s = spaces1.drop(columns=['Contains_Whitespace'])
+
+    def space2(self):#Check_20 check spaces
+        spaces2 = self.ecrf_df4.loc[self.ecrf_df4['Q #'].ne('')]
+        cols2 = ['Answers', 'Database Value', 'Display Sequence', 'Table / Form Key Column']
+        def check_whitespace02(cell_value):
+            if isinstance(cell_value, str) and (cell_value.startswith(" ") or cell_value.endswith(" ")):
+                return True
+            else:
+                return False
+        # 在指定列应用检测函数
+        spaces2['Contains_Whitespace'] = spaces2[cols2].map(lambda x: check_whitespace02(x)).any(axis=1)
+        # 筛选包含空格的行
+        spaces2 = spaces2[spaces2['Contains_Whitespace']]
+        # 删除辅助列
+        self.space2s = spaces2.drop(columns=['Contains_Whitespace'])
+
+    def create_downloadable_excel(self):
+        # 获取各 DataFrame 的行数
+        rows_df1 = len(self.dup_qids.index)
+        rows_df2 = len(self.filtered_datas.index)
+        rows_df3 = len(self.parent_qs.index)
+        rows_df4 = len(self.blank_instructions.index)
+        rows_df5 = len(self.empty_texts.index)
+        rows_df6 = len(self.empty_field_types.index)
+        rows_df7 = len(self.bl_emptys.index)
+        rows_df8 = len(self.ffs.index)
+        rows_df9 = len(self.empty_answers.index)
+        rows_df10 = len(self.matching_amounts.index)
+        rows_df11 = len(self.validate_date_fields.index)
+        rows_df12 = len(self.validate_answer_overrides.index)
+        rows_df13 = len(self.fys.index)
+        rows_df14 = len(self.nms.index)
+        rows_df15 = len(self.multi_label_names.index)
+        rows_df16 = len(self.same_domain_names.index)
+        rows_df17 = len(self.empty_bios.index)
+        rows_df18 = len(self.at_least_one_not_emptys.index)
+        rows_df19 = len(self.space1s.index)
+        rows_df20 = len(self.space2s.index)
+        # ---------------创建一个第一个sheet， summary DataFrame---------------------
+        summarydic = {'Sheet_Name': ['01.Duplicate QID',
+                                     '02.QID Format',
+                                     '03.Parent QID',
+                                     '04.Date_Multi Select OSI missin',
+                                     '05.Missing Question Text',
+                                     '06.Missing Field Type',
+                                     '07.Drop Down Related',
+                                     '08.Freeform Text_Answer',
+                                     '09.Drop Down_Answer',
+                                     '10.DB_DS_Answer',
+                                     '11.Date Postfix_Tool',
+                                     '12.Overrides',
+                                     '13.Standard Fields',
+                                     '14.Non Mand _ Read Only',
+                                     '15.Labels',
+                                     '16.Unique Domains',
+                                     '17.Missing DVL',
+                                     '18.Missing VL',
+                                     '19.Extra Spaces_line breaks',
+                                     '20.Extra Spaces'
+                                     ],
+                      'Number of Rows':[rows_df1,
+                                        rows_df2,
+                                        rows_df3,
+                                        rows_df4,
+                                        rows_df5,
+                                        rows_df6,
+                                        rows_df7,
+                                        rows_df8,
+                                        rows_df9,
+                                        rows_df10,
+                                        rows_df11,
+                                        rows_df12,
+                                        rows_df13,
+                                        rows_df14,
+                                        rows_df15,
+                                        rows_df16,
+                                        rows_df17,
+                                        rows_df18,
+                                        rows_df19,
+                                        rows_df20],
+                      'Explanation of Error': [r'01.Two questions in the eCRF Specifications have the same QID #',
+                                               r'02.QID must be 4+ digits and not begin with 0',
+                                               r'03.Parent QID cannot be found in the eCRF Specifications',
+                                               r'04.Date field or Multi Select Field Type missing standard On-Screen Instructions',
+                                               r'05.Question Text is blank or contains only numbers (must contain text)',
+                                               r'06.Field Type is blank',
+                                               r'07.Questions with the ‘Drop Down List – Related’ Field Type missing business logic detailing related QIDs',
+                                               r'08.Field Type ‘Freeform Text Entry - Short/Long’ has Answer Text, but should be blank',
+                                               r'09.Field Type requiring Drop Down Values is missing Answer Text',
+                                               r'10.The number of values in all three columns (Answers, Database Values, Display Sequence) must be equal',
+                                               r'11.Date Field Type is missing postfix label with the date format and a Calendar in the Tools column',
+                                               r'12.Field Type with Overrides (i.e. Date w/ Format dd/mmm/yyyy or ND Field Type) is missing text in the Overrides and Postfix columns in the eCRF Specifications.',
+                                               '13.Field Types entry should match one of the following standards as per implementation in eBuilder: \n Please remember to check for extra spaces and line breaks \n Check Box List – Multi Select \n Date w/ Format dd/mmm/yyyy \n Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy \n Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or UNK \n Date w/ Format mmm/yyyy or yyyy or UNK \n Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or UNK or ND \n Date w/ Format dd/mmm/yyyy or mmm/yyyy or yyyy or ND \n Date w/ Format dd/mmm/yyyy or ND \n Drop Down List – Single Select \n Drop Down List – Multi Select \n Drop Down List – Related Question \n File Input \n Freeform Text Entry – Short \n Freeform Text Entry – Long \n Numeric \n Numeric w/ upto 1 decimal \n Numeric w/ upto 2 decimals \n Radio Button List – Single Select \n Time w/ Format 99:99 (24 hr clock) \n Time w/ Format 99:99:99 (24 hr clock) \n Time w/ Format 12:59 (12 hr clock) \n Yes / No Multiselect \n',
+                                               '14.Only 1 of these 3 options should be present, including formatting and spelling: \n Non Mandatory / Read Only \n Non Mandatory \n Read Only',
+                                               r'15.When different QIDs share the same Domain and Variable Name, they should have the same Label Name',
+                                               r'16.When 2 variables within a Form are the same, the Domain Name should be different',
+                                               r'17.Domain, Variable, or Label names are missing for a question',
+                                               r'18.There should not be 2 blank cells within the Domain, Variable, or Label.  Only Domain can be blank; if applicable, Variable and Label should always have data',
+                                               '19.Check for leading and tailing spaces and for line breaks in the following columns: \n icon Accessed Help Text \n On Screen Instructions \n Question \n Field Type \n Domain \n Variable \n Label',
+                                               '20.Check for leading and tailing spaces in the following columns: \n Answers \n Database Value \n Display Sequence \n Table / Form Key Column'
+                                               ]
+                      }
+        summary = pd.DataFrame(summarydic)
+
+        # ------------为了最后创建一个新的sheet(merge_df) ，包含unique QID， two new extra column (Issue and Issue Counts),concat除了summary之外的所有df放入total info-----------
+        new_dataframes_dict = {
+                    '01.Duplicate QID': self.dup_qids,
+                    '02.QID Format': self.filtered_datas,
+                    '03.Parent QID': self.parent_qs,
+                    '04.Date_Multi Select OSI missin': self.blank_instructions,
+                    '05.Missing Question Text': self.empty_texts,
+                    '06.Missing Field Type': self.empty_field_types,
+                    '07.Drop Down Related':self.bl_emptys,
+                    '08.Freeform Text_Answer': self.ffs,
+                    '09.Drop Down_Answer': self.empty_answers,
+                    '10.DB_DS_Answer': self.matching_amounts,
+                    '11.Date Postfix_Tool': self.validate_date_fields,
+                    '12.Overrides': self.validate_answer_overrides,
+                    '13.Standard Fields': self.fys,
+                    '14.Non Mand _ Read Only': self.nms,
+                    '15.Labels': self.multi_label_names,
+                    '16.Unique Domains': self.same_domain_names,
+                    '17.Missing DVL': self.empty_bios,
+                    '18.Missing VL': self.at_least_one_not_emptys,
+                    '19.Extra Spaces_line breaks': self.space1s,
+                    '20.Extra Spaces': self.space2s
+                }
+
+        for sheet_name, sheet_data in new_dataframes_dict.items():  # 给每个sheet添加 ISSUES column，名字是各自的sheetname
+            sheet_data['Issues'] = sheet_name
+        concatenated_df = pd.concat(new_dataframes_dict.values(), axis=0)
+        concatenated_df = concatenated_df.fillna('')  # NAN is not dup in pandas
+        concatenated_df = concatenated_df.map(lambda x: x.strip() if isinstance(x, str) else x)
+        concatenated_df = concatenated_df[~concatenated_df.duplicated()]
+
+        new_data = concatenated_df.groupby(['Q #'])['Issues'].apply(lambda x: x.str.cat(sep=';')).reset_index()
+        new_data['Issue Count'] = new_data['Issues'].str.count(';') + 1
+
+        concatenated_df2 = concatenated_df.iloc[:, :-1]
+        merge_df = new_data.join(concatenated_df2.set_index('Q #'), on='Q #', how='left')
+        merge_df = merge_df[~merge_df.duplicated()]
+        order = ['Form', 'Page', 'Section', 'Q #', 'Parent Q#', 'icon Accessed Help Text', 'On Screen Instructions',
+                 'Question', 'Answers',
+                 'Export Value', 'Database Value',
+                 'Display Sequence', 'Field Type', 'Answer Overrides', 'Prefix Label', 'Postfix Label', 'Tools',
+                 'Non Mandatory / Read Only', 'Business Logic / Validation', 'Table / Form Key Column', 'Domain',
+                 'Variable',
+                 'Label',
+                 'Issue Count', 'Issues']
+        merge_df = merge_df[order]
+
+        dataframes2 = {
+            'SUMMARY': summary,
+            'Total Info': merge_df,  # (Issue and Issue Counts)
+            '01.Duplicate QID': self.dup_qids,
+            '02.QID Format': self.filtered_datas,
+            '03.Parent QID': self.parent_qs,
+            '04.Date_Multi Select OSI missin': self.blank_instructions,
+            '05.Missing Question Text': self.empty_texts,
+            '06.Missing Field Type': self.empty_field_types,
+            '07.Drop Down Related': self.bl_emptys,
+            '08.Freeform Text_Answer': self.ffs,
+            '09.Drop Down_Answer': self.empty_answers,
+            '10.DB_DS_Answer': self.matching_amounts,
+            '11.Date Postfix_Tool': self.validate_date_fields,
+            '12.Overrides': self.validate_answer_overrides,
+            '13.Standard Fields': self.fys,
+            '14.Non Mand _ Read Only': self.nms,
+            '15.Labels': self.multi_label_names,
+            '16.Unique Domains': self.same_domain_names,
+            '17.Missing DVL': self.empty_bios,
+            '18.Missing VL': self.at_least_one_not_emptys,
+            '19.Extra Spaces_line breaks': self.space1s,
+            '20.Extra Spaces': self.space2s
+        }
+
+        final_dict = {key: value.drop('Issues', axis=1) if key not in ['SUMMARY', 'Total Info'] else value for key, value in dataframes2.items()}
+        # 创建一个BytesIO对象，用于在内存中写入Excel数据
+        excel_data = BytesIO()
+        # 创建一个Workbook对象（即Excel文件对象）
+        wb = Workbook()
+        default_sheet = wb.active
+        wb.remove(default_sheet)
+
+        def highlight_column(df, columns_to_highlight, sheet):
+            yellow_fill = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+            for col in columns_to_highlight:
+                col_index = df.columns.get_loc(col) + 1  # 获取列的索引（加1是因为openpyxl中索引从1开始）
+                for cell in sheet.iter_rows(min_row=1, min_col=col_index, max_row=len(df) + 1, max_col=col_index):
+                    for c in cell:
+                        c.fill = yellow_fill
+
+        # ----------------------遍历前面dataframe2 dict里每个sheet---------------------------------
+        for df_name, df in final_dict.items():  # df_name 是key, df是value
+            # 为每一个key：value pair 创建一个新的工作表
+            sheet = wb.create_sheet(df_name)
+
+            # 将 DataFrame 写入到当前的工作表
+            for r in dataframe_to_rows(df, index=False, header=True):  # r是当前df每行的数据，写入sheet
+                sheet.append(r)
+
+            # 设定需要高亮的列名，这里根据 DataFrame 进行设置
+            if df_name == 'SUMMARY':
+                columns_to_highlight = []
+            elif df_name == 'Total Info':
+                columns_to_highlight = []
+            elif df_name == '01.Duplicate QID':
+                columns_to_highlight = ['Q #']
+            elif df_name == '02.QID Format':
+                columns_to_highlight = ['Q #']
+            elif df_name == '03.Parent QID':
+                columns_to_highlight = ['Q #', 'Parent Q#']
+            elif df_name == '04.Date_Multi Select OSI missin':
+                columns_to_highlight = ['Q #', 'Field Type', 'On Screen Instructions']
+            elif df_name == '05.Missing Question Text':
+                columns_to_highlight = ['Q #', 'Question']
+            elif df_name == '06.Missing Field Type':
+                columns_to_highlight = ['Q #', 'Field Type']
+            elif df_name == '07.Drop Down Related':
+                columns_to_highlight = ['Q #', 'Field Type', 'Business Logic / Validation']
+            elif df_name == '08.Freeform Text_Answer':
+                columns_to_highlight = ['Q #', 'Answers', 'Field Type', 'Database Value', 'Display Sequence']
+            elif df_name == '09.Drop Down_Answer':
+                columns_to_highlight = ['Q #', 'Answers', 'Field Type']
+            elif df_name == '10.DB_DS_Answer':
+                columns_to_highlight = ['Q #', 'Answers', 'Database Value', 'Display Sequence']
+            elif df_name == '11.Date Postfix_Tool':
+                columns_to_highlight = ['Q #', 'Field Type', 'Tools', 'Postfix Label']
+            elif df_name == '12.Overrides':
+                columns_to_highlight = ['Q #', 'Field Type', 'Answer Overrides', 'Postfix Label']
+            elif df_name == '13.Standard Fields':
+                columns_to_highlight = ['Q #', 'Field Type']
+            elif df_name == '14.Non Mand _ Read Only':
+                columns_to_highlight = ['Q #', 'Non Mandatory / Read Only']
+            elif df_name == '15.Labels':
+                columns_to_highlight = ['Q #', 'Domain', 'Variable', 'Label']
+            elif df_name == '16.Unique Domains':
+                columns_to_highlight = ['Form', 'Q #', 'Domain', 'Variable']
+            elif df_name == '17.Missing DVL':
+                columns_to_highlight = ['Q #', 'Domain', 'Variable', 'Label']
+            elif df_name == '18.Missing VL':
+                columns_to_highlight = ['Q #', 'Domain', 'Variable', 'Label']
+            elif df_name == '19.Extra Spaces_line breaks':
+                columns_to_highlight = ['Q #']
+            elif df_name == '20.Extra Spaces':
+                columns_to_highlight = ['Q #']
+            highlight_column(df, columns_to_highlight, sheet)
+
+        # ---------------Check19/20 highlight---------------------前面的df只是提出有问题的行，但是这里是专门负责有问题的cell高亮
+        def check_19(sheet, indice):
+            for row_index, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):  # 行索引从2开始
+                for col_index, cell_content in enumerate(row, start=1):  # 列索引从1开始
+                    if col_index in indice:
+                        if str(cell_content).strip() != str(cell_content) or '\n' in str(cell_content):
+                            cell_address = sheet.cell(row=row_index, column=col_index).coordinate
+                            sheet[cell_address].fill = PatternFill(start_color="FFFF00",
+                                                                          end_color="FFFF00",
+                                                                          fill_type="solid")  # 使用黄色高亮显示
+
+        def check_20(sheet, indice):
+            for row_index, row in enumerate(sheet.iter_rows(min_row=2, values_only=True), start=2):  # 行索引从2开始
+                for col_index, cell_content in enumerate(row, start=1):  # 列索引从1开始
+                    if col_index in indice:
+                        if str(cell_content).strip() != str(cell_content):
+                            cell_address = sheet.cell(row=row_index, column=col_index).coordinate
+                            sheet[cell_address].fill = PatternFill(start_color="FFFF00",
+                                                                          end_color="FFFF00",
+                                                                          fill_type="solid")  # 使用黄色高亮显示
+
+        # 指定要遍历的列索引列表
+        # column_names = ['icon Accessed Help Text', 'On Screen Instructions', 'Question', 'Field Type', 'Domain', 'Variable', 'Label']
+        sheet_to_process19 = wb['19.Extra Spaces_line breaks']
+        column_indices19 = [6, 7, 8, 13, 21, 22, 23]  # 对应了上面列的excel索引
+        sheet_to_process20 = wb['20.Extra Spaces']
+        column_indices20 = [9, 11, 12, 20]
+
+        check_19(sheet_to_process19, column_indices19)
+        check_20(sheet_to_process20, column_indices20)
+        # ---------------Check19/20 highlight---------------------
+        wb.save(excel_data)
+        excel_data.seek(0)  # 重新定位到开头
+        self.excel_bytes = excel_data.read()
+
+    def process_data(self):
+        #20 checks
+        self.dup_qid()
+        self.filtered_data()
+        self.parent_q()
+        self.blank_instruction()
+        self.empty_text()
+        self.empty_field_type()
+        self.bl_empty()
+        self.ff()
+        self.empty_answer()
+        self.matching_amount()
+        self.validate_date_field()
+        self.validate_answer_override()
+        self.fy()
+        self.nm()
+        self.multi_label_name()
+        self.same_domain_name()
+        self.empty_bio()
+        self.at_least_one_not_empty()
+        self.space1()
+        self.space2()
+
+
+        self.create_downloadable_excel()
+
+def main():
+    validation_obj = ValidationClass()
+    st.title('FUSION eCRF Self-Checking Module')
+    ecrf_file = st.file_uploader('Upload eCRF', type=['xlsx'])
+    if ecrf_file is not None and ecrf_file.name.endswith('xlsx'):
+            st.success("Successfully uploaded")
+            ecrf_raw = pd.read_excel(ecrf_file, sheet_name=None, dtype=object)
+
+            if st.button('Click Here for eCRF Check'):
+                # 捕获print输出并显示在应用中
+                class PrintToStream:
+                    def write(self, s):
+                        st.text(s)
+                sys.stdout = PrintToStream()
+                #parse ecrf
+                validation_obj.parse_ecrf(ecrf_raw)
+                if validation_obj.checks_executed:
+                    #process check and load into excel
+                    validation_obj.process_data()
+                    # 恢复sys.stdout以避免影响后续的print语句
+                    sys.stdout = sys.__stdout__
+                    current_datetime = datetime.now()
+                    formatted_datetime = current_datetime.strftime("%d/%b/%Y %H:%M:%S").replace(' ', '_')
+                    st.download_button(
+                        label='Download Validation Report',
+                        data=validation_obj.excel_bytes,
+                        file_name=f'eCRF_Specifications_Self_Check_Report_{formatted_datetime}.xlsx',
+                        mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                    )
+if __name__ == '__main__':
+    main()
